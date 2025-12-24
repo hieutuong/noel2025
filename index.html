@@ -616,6 +616,7 @@
                         }
                     };
                     
+                    console.log('Đang yêu cầu truy cập camera...');
                     const stream = await navigator.mediaDevices.getUserMedia(videoConstraints);
                     video.srcObject = stream;
                     
@@ -624,16 +625,52 @@
                     video.setAttribute('webkit-playsinline', 'true');
                     video.muted = true; // Safari yêu cầu muted để autoplay
                     
-                    // Xử lý cả loadeddata và loadedmetadata cho Safari
-                    const startPrediction = () => {
-                        if (video.readyState >= 2) { // HAVE_CURRENT_DATA
+                    // Đảm bảo video play được - CRITICAL FIX
+                    const startVideoAndPrediction = async () => {
+                        try {
+                            // Đợi video sẵn sàng
+                            if (video.readyState < 2) {
+                                await new Promise((resolve) => {
+                                    const checkReady = () => {
+                                        if (video.readyState >= 2) {
+                                            resolve();
+                                        } else {
+                                            video.addEventListener('loadeddata', checkReady, { once: true });
+                                            video.addEventListener('loadedmetadata', checkReady, { once: true });
+                                        }
+                                    };
+                                    checkReady();
+                                });
+                            }
+                            
+                            // Đảm bảo video play được
+                            if (video.paused) {
+                                await video.play();
+                                console.log('Video đã được play thành công');
+                            }
+                            
+                            // Bắt đầu prediction
+                            console.log('Bắt đầu nhận diện cử chỉ...');
                             predictWebcam();
-                        } else {
-                            video.addEventListener("loadeddata", startPrediction, { once: true });
-                            video.addEventListener("loadedmetadata", startPrediction, { once: true });
+                        } catch (playError) {
+                            console.error('Lỗi khi play video:', playError);
+                            // Vẫn thử predict nếu video đã có data
+                            if (video.readyState >= 2) {
+                                console.log('Video có data, tiếp tục predict dù không play được');
+                                predictWebcam();
+                            } else {
+                                STATE.hand.detected = false;
+                            }
                         }
                     };
-                    startPrediction();
+                    
+                    // Khởi động ngay khi video có metadata
+                    if (video.readyState >= 1) {
+                        startVideoAndPrediction();
+                    } else {
+                        video.addEventListener('loadedmetadata', startVideoAndPrediction, { once: true });
+                        video.addEventListener('loadeddata', startVideoAndPrediction, { once: true });
+                    }
                 } catch (error) {
                     console.error('Lỗi khi truy cập webcam:', error);
                     // Hiển thị thông báo lỗi cho user nếu cần
@@ -646,43 +683,100 @@
         }
 
         let lastVideoTime = -1;
+        let predictionRunning = false;
         async function predictWebcam() {
-            if (video.currentTime !== lastVideoTime) {
-                lastVideoTime = video.currentTime;
-                if (handLandmarker) {
+            // Đảm bảo chỉ chạy một instance
+            if (predictionRunning) return;
+            predictionRunning = true;
+            
+            const runPrediction = async () => {
+                try {
+                    // Kiểm tra video có sẵn sàng không
+                    if (!video || !handLandmarker) {
+                        predictionRunning = false;
+                        return;
+                    }
+                    
+                    // Kiểm tra video có data không
+                    if (video.readyState < 2) {
+                        // Video chưa có data, đợi một chút
+                        requestAnimationFrame(runPrediction);
+                        return;
+                    }
+                    
+                    // Detect hand landmarks - luôn chạy, không phụ thuộc vào currentTime
+                    // (vì một số browser có thể không update currentTime đúng cách)
                     const result = handLandmarker.detectForVideo(video, performance.now());
                     processGestures(result);
+                    
+                    // Update lastVideoTime để track
+                    if (video.currentTime !== lastVideoTime) {
+                        lastVideoTime = video.currentTime;
+                    }
+                    
+                    predictionRunning = false;
+                    requestAnimationFrame(predictWebcam);
+                } catch (error) {
+                    console.error('Lỗi trong predictWebcam:', error);
+                    predictionRunning = false;
+                    // Retry sau một khoảng thời gian
+                    setTimeout(() => {
+                        if (video && handLandmarker) {
+                            requestAnimationFrame(predictWebcam);
+                        }
+                    }, 100);
                 }
-            }
-            requestAnimationFrame(predictWebcam);
+            };
+            
+            runPrediction();
         }
 
         function processGestures(result) {
-            if (result.landmarks && result.landmarks.length > 0) {
+            if (result && result.landmarks && result.landmarks.length > 0) {
                 STATE.hand.detected = true;
                 const lm = result.landmarks[0];
-                STATE.hand.x = (lm[9].x - 0.5) * 2;
-                STATE.hand.y = (lm[9].y - 0.5) * 2;
+                
+                // Đảm bảo landmarks có đủ điểm
+                if (lm && lm.length >= 21) {
+                    STATE.hand.x = (lm[9].x - 0.5) * 2;
+                    STATE.hand.y = (lm[9].y - 0.5) * 2;
 
-                const thumb = lm[4]; const index = lm[8]; const wrist = lm[0];
-                const pinchDist = Math.hypot(thumb.x - index.x, thumb.y - index.y);
-                const tips = [lm[8], lm[12], lm[16], lm[20]];
-                let avgDist = 0;
-                tips.forEach(t => avgDist += Math.hypot(t.x - wrist.x, t.y - wrist.y));
-                avgDist /= 4;
+                    const thumb = lm[4]; 
+                    const index = lm[8]; 
+                    const wrist = lm[0];
+                    
+                    // Kiểm tra landmarks hợp lệ
+                    if (thumb && index && wrist) {
+                        const pinchDist = Math.hypot(thumb.x - index.x, thumb.y - index.y);
+                        const tips = [lm[8], lm[12], lm[16], lm[20]];
+                        let avgDist = 0;
+                        let validTips = 0;
+                        
+                        tips.forEach(t => {
+                            if (t) {
+                                avgDist += Math.hypot(t.x - wrist.x, t.y - wrist.y);
+                                validTips++;
+                            }
+                        });
+                        
+                        if (validTips > 0) {
+                            avgDist /= validTips;
 
-                if (pinchDist < 0.05) {
-                    if (STATE.mode !== 'FOCUS') {
-                        STATE.mode = 'FOCUS';
-                        const photos = particleSystem.filter(p => p.type === 'PHOTO');
-                        if (photos.length) STATE.focusTarget = photos[Math.floor(Math.random() * photos.length)].mesh;
+                            if (pinchDist < 0.05) {
+                                if (STATE.mode !== 'FOCUS') {
+                                    STATE.mode = 'FOCUS';
+                                    const photos = particleSystem.filter(p => p.type === 'PHOTO');
+                                    if (photos.length) STATE.focusTarget = photos[Math.floor(Math.random() * photos.length)].mesh;
+                                }
+                            } else if (avgDist < 0.25) {
+                                STATE.mode = 'TREE';
+                                STATE.focusTarget = null;
+                            } else if (avgDist > 0.4) {
+                                STATE.mode = 'SCATTER';
+                                STATE.focusTarget = null;
+                            }
+                        }
                     }
-                } else if (avgDist < 0.25) {
-                    STATE.mode = 'TREE';
-                    STATE.focusTarget = null;
-                } else if (avgDist > 0.4) {
-                    STATE.mode = 'SCATTER';
-                    STATE.focusTarget = null;
                 }
             } else {
                 STATE.hand.detected = false;
