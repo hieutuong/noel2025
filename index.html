@@ -10,6 +10,11 @@
             overflow: hidden;
             background-color: #000000;
             font-family: 'Times New Roman', serif;
+            /* Safari touch gesture compatibility */
+            touch-action: none;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
         }
 
         #canvas-container {
@@ -19,6 +24,8 @@
             top: 0;
             left: 0;
             z-index: 1;
+            /* Safari touch compatibility */
+            touch-action: none;
         }
 
         /* UI Overlay - Minimalist */
@@ -98,6 +105,7 @@
             text-shadow: 0 0 50px rgba(252, 238, 167, 0.6);
             background: linear-gradient(to bottom, #fff, #eebb66);
             -webkit-background-clip: text;
+            background-clip: text;
             -webkit-text-fill-color: transparent;
             font-family: 'Cinzel', 'Times New Roman', serif;
             opacity: 0.9;
@@ -197,11 +205,11 @@
         </div>
     </div>
 
-    <!-- Webcam hidden structure -->
-    <div id="webcam-wrapper">
-        <video id="webcam" autoplay playsinline style="display:none;"></video>
-        <canvas id="webcam-preview"></canvas>
-    </div>
+        <!-- Webcam hidden structure -->
+        <div id="webcam-wrapper">
+            <video id="webcam" autoplay playsinline webkit-playsinline muted style="display:none;"></video>
+            <canvas id="webcam-preview"></canvas>
+        </div>
 
     <script type="module">
         import * as THREE from 'three';
@@ -572,19 +580,68 @@
             const vision = await FilesetResolver.forVisionTasks(
                 "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
             );
-            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+            
+            // Safari compatibility: Thử GPU trước, fallback về CPU nếu không được
+            let handLandmarkerOptions = {
                 baseOptions: {
                     modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
                     delegate: "GPU"
                 },
                 runningMode: "VIDEO",
                 numHands: 1
-            });
+            };
+
+            try {
+                handLandmarker = await HandLandmarker.createFromOptions(vision, handLandmarkerOptions);
+            } catch (gpuError) {
+                // Fallback về CPU nếu GPU không hỗ trợ (thường xảy ra trên Safari)
+                console.warn('GPU delegate không khả dụng, chuyển sang CPU:', gpuError);
+                handLandmarkerOptions.baseOptions.delegate = "CPU";
+                handLandmarker = await HandLandmarker.createFromOptions(vision, handLandmarkerOptions);
+            }
 
             if (navigator.mediaDevices?.getUserMedia) {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                video.srcObject = stream;
-                video.addEventListener("loadeddata", predictWebcam);
+                try {
+                    // Safari cần constraints cụ thể hơn
+                    const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+                    const videoConstraints = {
+                        video: {
+                            facingMode: 'user',
+                            width: { ideal: 640 },
+                            height: { ideal: 480 },
+                            // Safari-specific constraints
+                            ...(isSafari && {
+                                frameRate: { ideal: 30, max: 30 }
+                            })
+                        }
+                    };
+                    
+                    const stream = await navigator.mediaDevices.getUserMedia(videoConstraints);
+                    video.srcObject = stream;
+                    
+                    // Safari cần đảm bảo video được load đúng cách
+                    video.setAttribute('playsinline', 'true');
+                    video.setAttribute('webkit-playsinline', 'true');
+                    video.muted = true; // Safari yêu cầu muted để autoplay
+                    
+                    // Xử lý cả loadeddata và loadedmetadata cho Safari
+                    const startPrediction = () => {
+                        if (video.readyState >= 2) { // HAVE_CURRENT_DATA
+                            predictWebcam();
+                        } else {
+                            video.addEventListener("loadeddata", startPrediction, { once: true });
+                            video.addEventListener("loadedmetadata", startPrediction, { once: true });
+                        }
+                    };
+                    startPrediction();
+                } catch (error) {
+                    console.error('Lỗi khi truy cập webcam:', error);
+                    // Hiển thị thông báo lỗi cho user nếu cần
+                    STATE.hand.detected = false;
+                }
+            } else {
+                console.warn('getUserMedia không được hỗ trợ trên trình duyệt này');
+                STATE.hand.detected = false;
             }
         }
 
