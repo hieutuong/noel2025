@@ -260,8 +260,15 @@
             pinchThreshold: 0.05,        // Giống Chrome Windows
             closedHandThreshold: 0.25,   // Giống Chrome Windows
             openHandThreshold: 0.4,       // Giống Chrome Windows
-            smoothingFactor: 0.2          // Smoothing cho rotation, không ảnh hưởng gesture detection
+            smoothingFactor: 0.2,          // Smoothing cho rotation, không ảnh hưởng gesture detection
+            // Hysteresis để tránh flickering giữa các modes
+            closedHandThresholdLow: 0.22,  // Threshold thấp hơn để switch từ SCATTER về TREE
+            openHandThresholdHigh: 0.42    // Threshold cao hơn để switch từ TREE sang SCATTER
         };
+        
+        // Debouncing để tránh switch mode quá nhanh
+        let lastModeChangeTime = 0;
+        const MODE_CHANGE_DEBOUNCE = 200; // 200ms debounce
 
         let scene, camera, renderer, composer;
         let mainGroup;
@@ -809,21 +816,46 @@
                         
                         if (validTips > 0) {
                             avgDist /= validTips;
+                            
+                            const currentTime = performance.now();
+                            const canChangeMode = (currentTime - lastModeChangeTime) > MODE_CHANGE_DEBOUNCE;
 
-                            // Sử dụng thresholds giống Chrome Windows cho tất cả browsers
+                            // Priority 1: Pinch gesture (ưu tiên cao nhất)
                             if (pinchDist < GESTURE_CONFIG.pinchThreshold) {
-                                if (STATE.mode !== 'FOCUS') {
+                                if (STATE.mode !== 'FOCUS' && canChangeMode) {
                                     STATE.mode = 'FOCUS';
+                                    lastModeChangeTime = currentTime;
                                     const photos = particleSystem.filter(p => p.type === 'PHOTO');
                                     if (photos.length) STATE.focusTarget = photos[Math.floor(Math.random() * photos.length)].mesh;
                                 }
-                            } else if (avgDist < GESTURE_CONFIG.closedHandThreshold) {
-                                STATE.mode = 'TREE';
-                                STATE.focusTarget = null;
-                            } else if (avgDist > GESTURE_CONFIG.openHandThreshold) {
-                                STATE.mode = 'SCATTER';
-                                STATE.focusTarget = null;
+                            } 
+                            // Priority 2: Closed hand → TREE (chỉ khi không phải pinch)
+                            else if (avgDist < GESTURE_CONFIG.closedHandThreshold) {
+                                // Sử dụng threshold thấp hơn nếu đang ở SCATTER (hysteresis)
+                                const threshold = (STATE.mode === 'SCATTER') 
+                                    ? GESTURE_CONFIG.closedHandThresholdLow 
+                                    : GESTURE_CONFIG.closedHandThreshold;
+                                
+                                if (avgDist < threshold && STATE.mode !== 'TREE' && canChangeMode) {
+                                    STATE.mode = 'TREE';
+                                    STATE.focusTarget = null;
+                                    lastModeChangeTime = currentTime;
+                                }
+                            } 
+                            // Priority 3: Open hand → SCATTER (chỉ khi không phải pinch và không closed)
+                            else if (avgDist > GESTURE_CONFIG.openHandThreshold) {
+                                // Sử dụng threshold cao hơn nếu đang ở TREE (hysteresis)
+                                const threshold = (STATE.mode === 'TREE') 
+                                    ? GESTURE_CONFIG.openHandThresholdHigh 
+                                    : GESTURE_CONFIG.openHandThreshold;
+                                
+                                if (avgDist > threshold && STATE.mode !== 'SCATTER' && canChangeMode) {
+                                    STATE.mode = 'SCATTER';
+                                    STATE.focusTarget = null;
+                                    lastModeChangeTime = currentTime;
+                                }
                             }
+                            // Trường hợp trung gian: giữ nguyên mode hiện tại (tránh flickering)
                         }
                     }
                 }
