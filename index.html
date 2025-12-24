@@ -99,6 +99,7 @@
             text-shadow: 0 0 50px rgba(252, 238, 167, 0.6);
             background: linear-gradient(to bottom, #fff, #eebb66);
             -webkit-background-clip: text;
+            background-clip: text;
             -webkit-text-fill-color: transparent;
             font-family: 'Cinzel', 'Times New Roman', serif;
             opacity: 0.9;
@@ -166,6 +167,7 @@
         @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&display=swap');
     </style>
 
+    <script async src="https://unpkg.com/es-module-shims@1.8.0/dist/es-module-shims.js"></script>
     <script type="importmap">
         {
             "imports": {
@@ -268,6 +270,9 @@
 
         function initThree() {
             const container = document.getElementById('canvas-container');
+            // Fix iOS Safari height issue
+            container.style.height = '100dvh';
+
             scene = new THREE.Scene();
             scene.background = new THREE.Color(CONFIG.colors.bg);
             scene.fog = new THREE.FogExp2(CONFIG.colors.bg, 0.01);
@@ -583,9 +588,17 @@
             });
 
             if (navigator.mediaDevices?.getUserMedia) {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                video.srcObject = stream;
-                video.addEventListener("loadeddata", predictWebcam);
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    video.srcObject = stream;
+
+                    // Explicitly play video for Safari
+                    await video.play();
+
+                    video.addEventListener("loadeddata", predictWebcam);
+                } catch (err) {
+                    console.error("Error accessing webcam:", err);
+                }
             }
         }
 
