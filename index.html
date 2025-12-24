@@ -254,12 +254,13 @@
             smoothedHand: { x: 0, y: 0 }
         };
 
-        // Gesture thresholds - điều chỉnh cho Safari
+        // Gesture thresholds - GIỐNG NHAU cho tất cả browsers (giống Chrome Windows)
+        // Chỉ tối ưu performance cho Safari, không thay đổi gesture logic
         const GESTURE_CONFIG = {
-            pinchThreshold: isSafari ? 0.06 : 0.05,  // Safari cần threshold cao hơn
-            closedHandThreshold: isSafari ? 0.28 : 0.25,
-            openHandThreshold: isSafari ? 0.35 : 0.4,
-            smoothingFactor: isSafari ? 0.15 : 0.2  // Safari cần smoothing nhiều hơn
+            pinchThreshold: 0.05,        // Giống Chrome Windows
+            closedHandThreshold: 0.25,   // Giống Chrome Windows
+            openHandThreshold: 0.4,       // Giống Chrome Windows
+            smoothingFactor: 0.2          // Smoothing cho rotation, không ảnh hưởng gesture detection
         };
 
         let scene, camera, renderer, composer;
@@ -779,10 +780,12 @@
                     const rawX = (lm[9].x - 0.5) * 2;
                     const rawY = (lm[9].y - 0.5) * 2;
                     
-                    // Smoothing cho Safari - giảm jitter
-                    const smoothing = GESTURE_CONFIG.smoothingFactor;
+                    // Hand position - không smoothing cho gesture detection
+                    // Smoothing chỉ dùng cho rotation, không ảnh hưởng gesture thresholds
                     STATE.hand.x = rawX;
                     STATE.hand.y = rawY;
+                    // Smoothing chỉ cho rotation (để mượt hơn), không dùng cho gesture detection
+                    const smoothing = GESTURE_CONFIG.smoothingFactor;
                     STATE.smoothedHand.x += (rawX - STATE.smoothedHand.x) * smoothing;
                     STATE.smoothedHand.y += (rawY - STATE.smoothedHand.y) * smoothing;
 
@@ -807,7 +810,7 @@
                         if (validTips > 0) {
                             avgDist /= validTips;
 
-                            // Sử dụng thresholds đã điều chỉnh cho Safari
+                            // Sử dụng thresholds giống Chrome Windows cho tất cả browsers
                             if (pinchDist < GESTURE_CONFIG.pinchThreshold) {
                                 if (STATE.mode !== 'FOCUS') {
                                     STATE.mode = 'FOCUS';
